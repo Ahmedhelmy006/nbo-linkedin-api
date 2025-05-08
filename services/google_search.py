@@ -15,7 +15,36 @@ from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
+# Import settings with fallback values
 from config import settings
+
+# Initialize fallback values for settings
+GOOGLE_SEARCH_HEADLESS = True
+GOOGLE_SEARCH_MAX_RESULTS = 10
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+BROWSER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+
+# Try to get values from settings, use fallbacks if not available
+try:
+    GOOGLE_SEARCH_HEADLESS = getattr(settings, 'GOOGLE_SEARCH_HEADLESS', GOOGLE_SEARCH_HEADLESS)
+except AttributeError:
+    logging.warning("GOOGLE_SEARCH_HEADLESS not found in settings, using default value")
+
+try:
+    GOOGLE_SEARCH_MAX_RESULTS = getattr(settings, 'GOOGLE_SEARCH_MAX_RESULTS', GOOGLE_SEARCH_MAX_RESULTS)
+except AttributeError:
+    logging.warning("GOOGLE_SEARCH_MAX_RESULTS not found in settings, using default value")
+
+try:
+    USER_AGENT = getattr(settings, 'USER_AGENT', USER_AGENT)
+except AttributeError:
+    logging.warning("USER_AGENT not found in settings, using default value")
+
+try:
+    BROWSER_ARGS = getattr(settings, 'BROWSER_ARGS', BROWSER_ARGS)
+except AttributeError:
+    logging.warning("BROWSER_ARGS not found in settings, using default value")
+
 from config.headers import get_google_search_headers, get_openai_headers
 from config.api_keys import OPENAI_API_KEY
 
@@ -26,7 +55,7 @@ class GoogleSearch:
     Performs Google searches to find LinkedIn profiles.
     """
     
-    def __init__(self, headless=True, max_results=None):
+    def __init__(self, headless=None, max_results=None):
         """
         Initialize the Google search component.
         
@@ -34,8 +63,8 @@ class GoogleSearch:
             headless: Whether to run the browser in headless mode
             max_results: Maximum number of search results to retrieve
         """
-        self.headless = headless if headless is not None else settings.GOOGLE_SEARCH_HEADLESS
-        self.max_results = max_results or settings.GOOGLE_SEARCH_MAX_RESULTS
+        self.headless = headless if headless is not None else GOOGLE_SEARCH_HEADLESS
+        self.max_results = max_results or GOOGLE_SEARCH_MAX_RESULTS
         self.headers = get_google_search_headers()
         
         # Alternative selectors for search results
@@ -46,6 +75,8 @@ class GoogleSearch:
             "div.tF2Cxc",
             "div.yuRUbf"
         ]
+    
+    # Rest of the class remains unchanged
     
     async def extract_search_results(self, page, max_results=None) -> List[Dict[str, str]]:
         """
@@ -256,14 +287,14 @@ class GoogleSearch:
             # Launch the browser
             browser = await p.chromium.launch(
                 headless=self.headless,
-                args=settings.BROWSER_ARGS
+                args=BROWSER_ARGS
             )
             
             try:
                 # Create context with minimal options to avoid detection
                 context = await browser.new_context(
                     viewport={'width': 1200, 'height': 800},
-                    user_agent=settings.USER_AGENT,
+                    user_agent=USER_AGENT,
                     java_script_enabled=True,
                 )
                 
@@ -323,7 +354,7 @@ class GoogleSearch:
             "You are a helpful assistant that identifies the correct LinkedIn profile URL for a person based on their information "
             "and search results. Given a person's information (email, name, location) and search results, find the most likely "
             "LinkedIn profile URL for that person. Only respond with the full URL if you're confident it's correct, or 'null' "
-            "Most likely the first result is the person we're looking for."
+            "Most likely the result is in the first 3-5 results, the person we're looking for."
         )
         
         # Clean member_info by removing null/empty values

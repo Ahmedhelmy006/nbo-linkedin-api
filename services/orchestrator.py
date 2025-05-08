@@ -1,6 +1,7 @@
 import logging
 import time
 from typing import Dict, Optional
+import traceback
 
 from services.email_classification.classifier import EmailClassifier
 from services.lookup_processor import LinkedInLookupProcessor
@@ -16,9 +17,11 @@ class LinkedInOrchestrator:
     
     def __init__(self):
         """Initialize the orchestrator with required services."""
+        logger.info("Initializing LinkedInOrchestrator")
         self.email_classifier = EmailClassifier()
         self.lookup_processor = LinkedInLookupProcessor()
         self.rocketreach_lookup = LinkedInProfileLookup()
+        logger.info("LinkedInOrchestrator initialized successfully")
     
     async def orchestrate_lookup(
         self,
@@ -44,12 +47,10 @@ class LinkedInOrchestrator:
         start_time = time.time()
         
         try:
-            print(f"DEBUG: Orchestrator - Starting lookup for email={email}, full_name={full_name}")
+            logger.info(f"DEBUG: Orchestrator - Starting lookup for email={email}, full_name={full_name}")
             # Classify the email
             domain_type, domain = self.email_classifier.classify_email(email)
-            print(f"DEBUG: Orchestrator - Email {email} classified as {domain_type}")
-            
-            logger.info(f"Email {email} classified as {domain_type}")
+            logger.info(f"DEBUG: Orchestrator - Email {email} classified as {domain_type}")
             
             linkedin_url = None
             method_used = None
@@ -60,12 +61,14 @@ class LinkedInOrchestrator:
             if full_name:
                 name_parts = full_name.split()
                 first_name = name_parts[0] if name_parts else None
+                logger.info(f"DEBUG: Extracted first name: {first_name}")
             
             if domain_type == "work":
                 # For work emails, try Google search first
-                logger.info(f"Attempting Google search for work email: {email}")
+                logger.info(f"DEBUG: Domain type is work, attempting Google search for: {email}")
                 
                 try:
+                    logger.info("DEBUG: Starting lookup_processor.find_linkedin_profile")
                     linkedin_url = await self.lookup_processor.find_linkedin_profile(
                         subscriber_id=email,  # Using email as subscriber_id
                         email=email,
@@ -74,32 +77,46 @@ class LinkedInOrchestrator:
                         location_state=location_state,
                         location_country=location_country
                     )
+                    logger.info(f"DEBUG: find_linkedin_profile returned: {linkedin_url}")
                     
                     if linkedin_url:
+                        logger.info("DEBUG: Google search succeeded")
                         method_used = "google_search"
                     else:
                         # If Google search fails, try RocketReach as fallback
-                        logger.info(f"Google search failed, trying RocketReach for work email: {email}")
-                        linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
-                        method_used = "rocketreach_fallback" if linkedin_url else None
+                        logger.info(f"DEBUG: Google search returned no results, trying RocketReach fallback")
+                        try:
+                            linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
+                            logger.info(f"DEBUG: RocketReach fallback returned: {linkedin_url}")
+                            method_used = "rocketreach_fallback" if linkedin_url else None
+                        except Exception as rr_e:
+                            logger.error(f"DEBUG: RocketReach fallback error: {rr_e}")
+                            error_message = f"RocketReach fallback failed: {str(rr_e)}"
+                
                 except Exception as e:
-                    logger.error(f"Error during Google search: {e}")
+                    logger.error(f"DEBUG: Error during Google search: {e}")
+                    logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
+                    error_message = f"Google search error: {str(e)}"
+                    
                     # Try RocketReach as fallback on error
                     try:
+                        logger.info("DEBUG: Attempting RocketReach as fallback after Google search error")
                         linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
+                        logger.info(f"DEBUG: RocketReach fallback returned: {linkedin_url}")
                         method_used = "rocketreach_fallback"
                     except Exception as re:
-                        logger.error(f"RocketReach fallback also failed: {re}")
+                        logger.error(f"DEBUG: RocketReach fallback also failed: {re}")
                         error_message = f"Both lookup methods failed: {str(e)}; {str(re)}"
             
             else:  # personal email
                 # For personal emails, go directly to RocketReach
-                logger.info(f"Attempting RocketReach for personal email: {email}")
+                logger.info(f"DEBUG: Domain type is personal, attempting RocketReach for: {email}")
                 try:
                     linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
+                    logger.info(f"DEBUG: RocketReach lookup returned: {linkedin_url}")
                     method_used = "rocketreach_primary"
                 except Exception as e:
-                    logger.error(f"RocketReach lookup failed: {e}")
+                    logger.error(f"DEBUG: RocketReach lookup failed: {e}")
                     error_message = f"RocketReach lookup failed: {str(e)}"
             
             # Calculate processing time
@@ -116,14 +133,15 @@ class LinkedInOrchestrator:
                 "error_message": error_message
             }
             
-            logger.info(f"Lookup completed for {email}: success={result['success']}, method={method_used}, time={processing_time_ms}ms")
+            logger.info(f"DEBUG: Lookup completed for {email}: success={result['success']}, method={method_used}, time={processing_time_ms}ms, error={error_message}")
             
             return result
             
         except Exception as e:
             # Handle any unexpected exceptions
             processing_time_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"Unexpected error during orchestration: {e}")
+            logger.error(f"DEBUG: Unexpected error during orchestration: {e}")
+            logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
             
             return {
                 "email": email,

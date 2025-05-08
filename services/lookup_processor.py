@@ -6,6 +6,7 @@ profile lookup process.
 """
 import logging
 import asyncio
+import traceback
 from typing import Dict, List, Any, Optional, Tuple
 
 from .name_extractor import NameExtractor
@@ -19,8 +20,10 @@ class LinkedInLookupProcessor:
     
     def __init__(self):
         """Initialize the lookup processor."""
+        logger.info("DEBUG: Initializing LinkedInLookupProcessor")
         self.name_extractor = NameExtractor()
         self.google_search = GoogleSearch()
+        logger.info("DEBUG: LinkedInLookupProcessor initialized successfully")
     
     async def find_linkedin_profile(
         self,
@@ -45,6 +48,8 @@ class LinkedInLookupProcessor:
         Returns:
             LinkedIn profile URL or None if not found
         """
+        logger.info(f"DEBUG: Starting find_linkedin_profile for email={email}")
+        
         # Extract the domain and check if it's a work email
         domain = email.split('@')[1] if '@' in email else None
         
@@ -53,13 +58,20 @@ class LinkedInLookupProcessor:
             return None
         
         # Extract name from email
-        extracted_name, extraction_method = self.name_extractor.extract_name_from_email(email, first_name)
+        logger.info(f"DEBUG: Extracting name from email with first_name={first_name}")
+        try:
+            extracted_name, extraction_method = self.name_extractor.extract_name_from_email(email, first_name)
+            logger.info(f"DEBUG: Name extraction result: name={extracted_name}, method={extraction_method}")
+        except Exception as e:
+            logger.error(f"DEBUG: Error during name extraction: {e}")
+            logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
+            return None
         
         if not extracted_name:
             logger.warning(f"Could not extract name from {(email)}: {extraction_method}")
             return None
         
-        logger.info(f"Extracted name '{extracted_name}' from {(email)} using {extraction_method}")
+        logger.info(f"DEBUG: Extracted name '{extracted_name}' from {(email)} using {extraction_method}")
         
         # Parse first and last name
         name_parts = extracted_name.split()
@@ -70,6 +82,7 @@ class LinkedInLookupProcessor:
         # Extract first and last name
         extracted_first_name = name_parts[0]
         extracted_last_name = name_parts[-1]
+        logger.info(f"DEBUG: Parsed name: first={extracted_first_name}, last={extracted_last_name}")
         
         # Build the search query
         search_components = []
@@ -93,10 +106,23 @@ class LinkedInLookupProcessor:
         # Join with " + " format
         search_query = " + ".join(search_components)
         
-        logger.info(f"Searching for: {search_query}")
+        logger.info(f"DEBUG: Built search query: {search_query}")
         
         # Perform the search
-        search_results = await self.google_search.google_search(search_query)
+        logger.info(f"DEBUG: Calling google_search.google_search with query: {search_query}")
+        try:
+            search_results = await self.google_search.google_search(search_query)
+            logger.info(f"DEBUG: google_search returned {len(search_results) if search_results else 0} results")
+            
+            # Log first few results for debugging
+            if search_results:
+                for i, result in enumerate(search_results[:3]):
+                    logger.info(f"DEBUG: Search result {i+1}: {result.get('title')} - {result.get('url')}")
+            
+        except Exception as e:
+            logger.error(f"DEBUG: Error during google_search: {e}")
+            logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
+            return None
         
         if not search_results:
             logger.warning(f"No search results found for {(email)}")
@@ -113,7 +139,14 @@ class LinkedInLookupProcessor:
         }
         
         # Use OpenAI to analyze the search results
-        linkedin_url = await self.google_search.query_openai(member_info, search_results)
+        logger.info(f"DEBUG: Calling google_search.query_openai with member_info and search results")
+        try:
+            linkedin_url = await self.google_search.query_openai(member_info, search_results)
+            logger.info(f"DEBUG: query_openai returned: {linkedin_url}")
+        except Exception as e:
+            logger.error(f"DEBUG: Error during query_openai: {e}")
+            logger.error(f"DEBUG: Traceback: {traceback.format_exc()}")
+            return None
         
         if linkedin_url:
             logger.info(f"Found LinkedIn profile for {(email)}: {linkedin_url}")

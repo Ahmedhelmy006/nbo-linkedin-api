@@ -1,24 +1,30 @@
-# api/v1/endpoints/lookup.py (modified)
+# api/v1/endpoints/lookup.py
 from fastapi import APIRouter, HTTPException, Depends
 import logging
 from api.models import LinkedInLookupResponse
 from services.orchestrator import LinkedInOrchestrator
 from config.settings import settings
 from api.auth import api_key_auth
+
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# Remove dependencies from router
+# Create router with prefix and tags
 router = APIRouter(
     prefix="/lookup",
     tags=["lookup"]
 )
 
-# Remove the Depends(api_key_auth) dependency
+# Add authentication dependency back
 @router.get("/{email}/{name}", response_model=LinkedInLookupResponse)
-async def lookup_linkedin(email: str, name: str = None):
+async def lookup_linkedin(email: str, name: str = None, api_key: str = Depends(api_key_auth)):
     """
-    Perform reverse lookup from email to LinkedIn profile without authentication (temporary test).
+    Perform reverse lookup from email to LinkedIn profile.
+    
+    Args:
+        email: Email address to look up
+        name: Full name of the person (optional)
+        api_key: API key for authentication (from dependency)
     """
     try:
         logger.info(f"Received lookup request for email: {email}")
