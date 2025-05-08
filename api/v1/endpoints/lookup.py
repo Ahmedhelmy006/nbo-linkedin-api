@@ -8,11 +8,10 @@ from api.auth import api_key_auth
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# Create router without dependencies (we'll handle auth directly)
+# Remove dependencies from router
 router = APIRouter(
-    prefix="/lookup",  # Changed from "/linkedin"
-    tags=["lookup"],    # Changed from ["linkedin"]
-    dependencies=[Depends(api_key_auth)]
+    prefix="/lookup",
+    tags=["lookup"]
 )
 
 # Remove the Depends(api_key_auth) dependency
