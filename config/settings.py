@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     DB_NAME: str
     DB_USER: str
     DB_PASSWORD: str
-    CLOUD_BUCKET_NAME: str = "lookup_status"  # Replace with your actual bucket name
+    CLOUD_BUCKET_NAME: str = "lookup_status"  
 
     # API Keys
     OPENAI_API_KEY: str
