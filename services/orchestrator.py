@@ -44,8 +44,10 @@ class LinkedInOrchestrator:
         start_time = time.time()
         
         try:
+            print(f"DEBUG: Orchestrator - Starting lookup for email={email}, full_name={full_name}")
             # Classify the email
             domain_type, domain = self.email_classifier.classify_email(email)
+            print(f"DEBUG: Orchestrator - Email {email} classified as {domain_type}")
             
             logger.info(f"Email {email} classified as {domain_type}")
             

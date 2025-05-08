@@ -65,6 +65,7 @@ class LinkedInProfileLookup:
             LinkedIn profile URL or None if not found
         """
         # Validate email
+        print(f"DEBUG: RocketReach - Looking up profile for email={email}")
         if not EmailValidator.is_valid(email):
             logger.error(f"Invalid email format: {email}")
             raise ValueError(f"Invalid email format: {email}")
@@ -85,9 +86,9 @@ class LinkedInProfileLookup:
         linkedin_url = safe_call(lookup_function, email)
         
         if linkedin_url:
-            logger.info(f"Successfully found LinkedIn profile for {email}: {linkedin_url}")
+            print(f"DEBUG: RocketReach - Found LinkedIn profile: {linkedin_url}")
         else:
-            logger.info(f"No LinkedIn profile found for {email}")
+            print(f"DEBUG: RocketReach - No LinkedIn profile found")
         
         return linkedin_url
     
