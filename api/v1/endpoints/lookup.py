@@ -4,7 +4,7 @@ import logging
 from api.models import LinkedInLookupResponse
 from services.orchestrator import LinkedInOrchestrator
 from config.settings import settings
-
+from api.auth import api_key_auth
 # Initialize logger
 logger = logging.getLogger(__name__)
 

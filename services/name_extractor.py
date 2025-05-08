@@ -13,7 +13,7 @@ from typing import Tuple, Optional, List, Dict
 from config import settings
 from config.api_keys import OPENAI_API_KEY
 from config.headers import get_openai_headers
-from utils.helper import mask_email
+from utils.helpers import mask_email
 
 logger = logging.getLogger(__name__)
 
