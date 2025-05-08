@@ -10,8 +10,9 @@ logger = logging.getLogger(__name__)
 
 # Create router without dependencies (we'll handle auth directly)
 router = APIRouter(
-    prefix="/lookup",
-    tags=["lookup"]
+    prefix="/lookup",  # Changed from "/linkedin"
+    tags=["lookup"],    # Changed from ["linkedin"]
+    dependencies=[Depends(api_key_auth)]
 )
 
 @router.get("/email={email}-name={name}/{api_key}", response_model=LinkedInLookupResponse)
