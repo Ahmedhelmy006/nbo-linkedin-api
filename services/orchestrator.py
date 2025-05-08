@@ -4,7 +4,7 @@ from typing import Dict, Optional
 
 from services.email_classification.classifier import EmailClassifier
 from services.lookup_processor import LinkedInLookupProcessor
-from services.lookup import LinkedInProfileLookup
+from services.personal_lookup import LinkedInProfileLookup
 
 logger = logging.getLogger(__name__)
 

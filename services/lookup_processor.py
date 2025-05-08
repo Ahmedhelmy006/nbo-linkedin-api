@@ -10,8 +10,6 @@ from typing import Dict, List, Any, Optional, Tuple
 
 from .name_extractor import NameExtractor
 from .google_search import GoogleSearch
-from utils.helpers import mask_email
-
 logger = logging.getLogger(__name__)
 
 class LinkedInLookupProcessor:
@@ -51,22 +49,22 @@ class LinkedInLookupProcessor:
         domain = email.split('@')[1] if '@' in email else None
         
         if not domain:
-            logger.warning(f"Invalid email format: {mask_email(email)}")
+            logger.warning(f"Invalid email format: {(email)}")
             return None
         
         # Extract name from email
         extracted_name, extraction_method = self.name_extractor.extract_name_from_email(email, first_name)
         
         if not extracted_name:
-            logger.warning(f"Could not extract name from {mask_email(email)}: {extraction_method}")
+            logger.warning(f"Could not extract name from {(email)}: {extraction_method}")
             return None
         
-        logger.info(f"Extracted name '{extracted_name}' from {mask_email(email)} using {extraction_method}")
+        logger.info(f"Extracted name '{extracted_name}' from {(email)} using {extraction_method}")
         
         # Parse first and last name
         name_parts = extracted_name.split()
         if len(name_parts) < 2:
-            logger.warning(f"Insufficient name parts extracted for {mask_email(email)}: {extracted_name}")
+            logger.warning(f"Insufficient name parts extracted for {(email)}: {extracted_name}")
             return None
             
         # Extract first and last name
@@ -101,7 +99,7 @@ class LinkedInLookupProcessor:
         search_results = await self.google_search.google_search(search_query)
         
         if not search_results:
-            logger.warning(f"No search results found for {mask_email(email)}")
+            logger.warning(f"No search results found for {(email)}")
             return None
         
         # Prepare member info for OpenAI
@@ -118,8 +116,8 @@ class LinkedInLookupProcessor:
         linkedin_url = await self.google_search.query_openai(member_info, search_results)
         
         if linkedin_url:
-            logger.info(f"Found LinkedIn profile for {mask_email(email)}: {linkedin_url}")
+            logger.info(f"Found LinkedIn profile for {(email)}: {linkedin_url}")
         else:
-            logger.info(f"No LinkedIn profile found for {mask_email(email)}")
+            logger.info(f"No LinkedIn profile found for {(email)}")
         
         return linkedin_url

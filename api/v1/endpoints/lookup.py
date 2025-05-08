@@ -1,43 +1,46 @@
-from fastapi import APIRouter, Depends, HTTPException
+# api/v1/endpoints/lookup.py (modified)
+from fastapi import APIRouter, HTTPException, Depends
 import logging
-from api.models import LinkedInLookupRequest, LinkedInLookupResponse
-from api.auth import api_key_auth
+from api.models import LinkedInLookupResponse
 from services.orchestrator import LinkedInOrchestrator
+from config.settings import settings
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# Create router
+# Create router without dependencies (we'll handle auth directly)
 router = APIRouter(
-    prefix="/lookup",  # Changed from "/linkedin"
-    tags=["lookup"]    # Changed from ["linkedin"]
-    dependencies=[Depends(api_key_auth)]
+    prefix="/lookup",
+    tags=["lookup"]
 )
 
-@router.post("", response_model=LinkedInLookupResponse)  # Changed from "/lookup" to just ""
-async def lookup_linkedin(request: LinkedInLookupRequest):
+@router.get("/email={email}-name={name}/{api_key}", response_model=LinkedInLookupResponse)
+async def lookup_linkedin(email: str, name: str = None, api_key: str = None):
     """
-    Perform reverse lookup from email to LinkedIn profile.
+    Perform reverse lookup from email to LinkedIn profile using URL parameters.
     
     - **email**: Email address to look up (required)
-    - **full_name**: Full name of the person (optional)
-    - **location_city**: City location (optional)
-    - **location_state**: State/province location (optional)
-    - **location_country**: Country location (optional)
+    - **name**: Full name of the person (optional)
+    - **api_key**: API key for authentication (required)
     """
+    # First, validate API key
+    if api_key != settings.API_KEY:
+        logger.warning(f"Invalid API key attempted: {api_key}")
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
     try:
-        logger.info(f"Received lookup request for email: {request.email}")
+        logger.info(f"Received lookup request for email: {email}")
         
         # Initialize orchestrator
         orchestrator = LinkedInOrchestrator()
         
         # Perform lookup
         result = await orchestrator.orchestrate_lookup(
-            email=request.email,
-            full_name=request.full_name,
-            location_city=request.location_city,
-            location_state=request.location_state,
-            location_country=request.location_country
+            email=email,
+            full_name=name,
+            location_city=None,
+            location_state=None,
+            location_country=None
         )
         
         return result

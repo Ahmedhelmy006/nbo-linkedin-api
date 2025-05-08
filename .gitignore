@@ -372,4 +372,4 @@ temp/
 *token*
 
 #service account
-*.json
+data/service_accounts/
