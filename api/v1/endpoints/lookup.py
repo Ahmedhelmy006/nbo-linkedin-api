@@ -15,20 +15,12 @@ router = APIRouter(
     dependencies=[Depends(api_key_auth)]
 )
 
-@router.get("/email={email}-name={name}/{api_key}", response_model=LinkedInLookupResponse)
-async def lookup_linkedin(email: str, name: str = None, api_key: str = None):
+# Remove the Depends(api_key_auth) dependency
+@router.get("/{email}/{name}", response_model=LinkedInLookupResponse)
+async def lookup_linkedin(email: str, name: str = None):
     """
-    Perform reverse lookup from email to LinkedIn profile using URL parameters.
-    
-    - **email**: Email address to look up (required)
-    - **name**: Full name of the person (optional)
-    - **api_key**: API key for authentication (required)
+    Perform reverse lookup from email to LinkedIn profile without authentication (temporary test).
     """
-    # First, validate API key
-    if api_key != settings.API_KEY:
-        logger.warning(f"Invalid API key attempted: {api_key}")
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    
     try:
         logger.info(f"Received lookup request for email: {email}")
         
