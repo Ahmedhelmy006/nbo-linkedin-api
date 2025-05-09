@@ -11,7 +11,7 @@ import logging
 import asyncio
 import requests
 import urllib.parse
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -47,6 +47,7 @@ except AttributeError:
 
 from config.headers import get_google_search_headers, get_openai_headers
 from config.api_keys import OPENAI_API_KEY
+from .query_builder import QueryBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,42 @@ class GoogleSearch:
             "div.tF2Cxc",
             "div.yuRUbf"
         ]
+        
+        # Define supported Google domains
+        self.google_domains = [
+            "google.com",       # Default (US)
+            "google.de",        # Germany
+            "google.com.eg",    # Egypt
+            "google.com.au"     # Australia
+        ]
     
-    # Rest of the class remains unchanged
+    def is_linkedin_url(self, url: str) -> bool:
+        """
+        Comprehensive check for LinkedIn URLs.
+        Captures various LinkedIn URL formats.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL is a LinkedIn URL, False otherwise
+        """
+        linkedin_domains = [
+            'linkedin.com/in/',     # Standard profile URLs
+            'linkedin.com/company/', # Company pages
+            'linkedin.com/posts/',   # Posts
+            'linkedin.com/pulse/',   # Article links
+            'linkedin.com/groups/',  # Group pages
+            'eg.linkedin.com/in/',   # Country-specific profile URLs
+            'linkedin.com/feed/',    # Feed links
+            'linkedin.com/mwlite/'   # Mobile web links
+        ]
+        
+        # Convert URL to lowercase for case-insensitive matching
+        url_lower = url.lower()
+        
+        # Check if any LinkedIn domain is in the URL
+        return any(domain in url_lower for domain in linkedin_domains)
     
     async def extract_search_results(self, page, max_results=None) -> List[Dict[str, str]]:
         """
@@ -89,28 +124,6 @@ class GoogleSearch:
         Returns:
             List of search results with title, url, and snippet
         """
-        def is_linkedin_url(url):
-            """
-            Comprehensive check for LinkedIn URLs.
-            Captures various LinkedIn URL formats.
-            """
-            linkedin_domains = [
-                'linkedin.com/in/',     # Standard profile URLs
-                'linkedin.com/company/', # Company pages
-                'linkedin.com/posts/',   # Posts
-                'linkedin.com/pulse/',   # Article links
-                'linkedin.com/groups/',  # Group pages
-                'eg.linkedin.com/in/',   # Country-specific profile URLs
-                'linkedin.com/feed/',    # Feed links
-                'linkedin.com/mwlite/'   # Mobile web links
-            ]
-            
-            # Convert URL to lowercase for case-insensitive matching
-            url_lower = url.lower()
-            
-            # Check if any LinkedIn domain is in the URL
-            return any(domain in url_lower for domain in linkedin_domains)
-
         max_results = max_results or self.max_results
         results = []
         
@@ -252,8 +265,8 @@ class GoogleSearch:
                     filtered_results.append(result)
             
             # Prioritize LinkedIn results
-            linkedin_results = [r for r in filtered_results if is_linkedin_url(r["url"])]
-            other_results = [r for r in filtered_results if not is_linkedin_url(r["url"])]
+            linkedin_results = [r for r in filtered_results if self.is_linkedin_url(r["url"])]
+            other_results = [r for r in filtered_results if not self.is_linkedin_url(r["url"])]
             
             # Combine and limit to max_results
             final_results = linkedin_results + other_results
@@ -267,21 +280,22 @@ class GoogleSearch:
             logger.error(f"Error during result extraction: {e}")
             return []
     
-    async def google_search(self, query: str) -> List[Dict[str, str]]:
+    async def google_search(self, query: str, domain: str = "google.com") -> List[Dict[str, str]]:
         """
-        Perform Google search for LinkedIn profiles.
+        Perform Google search for LinkedIn profiles using a specific Google domain.
         
         Args:
             query: Search query
+            domain: Google domain to use (default: google.com)
             
         Returns:
             List of search results
         """
         # Encode the search query for URL
         encoded_query = urllib.parse.quote(query)
-        search_url = f'https://www.google.com/search?q={encoded_query}'
+        search_url = f'https://www.{domain}/search?q={encoded_query}'
         
-        logger.info(f"Searching: {search_url}")
+        logger.info(f"Searching on {domain}: {search_url}")
         
         async with async_playwright() as p:
             # Launch the browser
@@ -322,12 +336,153 @@ class GoogleSearch:
                 return results
                 
             except Exception as e:
-                logger.error(f"Error during search: {e}")
+                logger.error(f"Error during search on {domain}: {e}")
                 return []
             
             finally:
                 # Close the browser
                 await browser.close()
+    
+    async def multi_domain_search(self, query: str) -> Tuple[List[Dict[str, str]], str]:
+        """
+        Perform search across multiple Google domains until a LinkedIn profile is found.
+        
+        Args:
+            query: Search query
+            
+        Returns:
+            Tuple of (search results, domain used)
+        """
+        linkedin_found = False
+        domain_used = None
+        results = []
+        
+        # Try each domain in sequence
+        for domain in self.google_domains:
+            logger.info(f"Trying search on {domain} with query: {query}")
+            
+            try:
+                # Perform search on this domain
+                domain_results = await self.google_search(query, domain)
+                
+                # Check if any LinkedIn profiles were found
+                linkedin_results = [r for r in domain_results if self.is_linkedin_url(r["url"])]
+                
+                if linkedin_results:
+                    logger.info(f"Found {len(linkedin_results)} LinkedIn profiles on {domain}")
+                    results = domain_results
+                    domain_used = domain
+                    linkedin_found = True
+                    break
+                else:
+                    logger.info(f"No LinkedIn profiles found on {domain}, trying next domain")
+            
+            except Exception as e:
+                logger.error(f"Error during search on {domain}: {e}")
+                # Continue to next domain on error
+        
+        if not linkedin_found:
+            # If no LinkedIn profiles found on any domain, return results from first domain that returned any results
+            for domain in self.google_domains:
+                try:
+                    results = await self.google_search(query, domain)
+                    if results:
+                        domain_used = domain
+                        logger.info(f"No LinkedIn profiles found on any domain. Using results from {domain}")
+                        break
+                except Exception:
+                    continue
+        
+        return results, domain_used
+    
+    async def find_linkedin_profile_multi_domain(self, search_params: Dict[str, Any]) -> Tuple[Optional[str], str]:
+        """
+        Find LinkedIn profile by trying multiple search strategies across multiple Google domains.
+        
+        First tries searching with the full email, then falls back to name extraction if needed.
+        
+        Args:
+            search_params: Dictionary of search parameters
+            
+        Returns:
+            Tuple of (LinkedIn profile URL, domain used) or (None, None) if not found
+        """
+        # PHASE 1: Try with full email address first
+        logger.info(f"PHASE 1: Attempting search with full email address")
+        
+        # Create email-only query
+        email = search_params.get("email", "")
+        email_query = f"{email} + LinkedIn"
+        
+        logger.info(f"Trying email-only query: {email_query}")
+        
+        # Try the email-only query across all domains
+        results, domain = await self.multi_domain_search(email_query)
+        
+        # Check if any LinkedIn profiles were found
+        linkedin_results = [r for r in results if self.is_linkedin_url(r["url"])]
+        
+        if linkedin_results:
+            logger.info(f"PHASE 1 SUCCESS: Found LinkedIn profile with email-only query")
+            
+            # Use OpenAI to select the best match
+            member_info = {
+                "email": email,
+                "first_name": search_params.get("first_name", ""),
+                "last_name": search_params.get("last_name", ""),
+                "state": search_params.get("location_state", ""),
+                "country": search_params.get("location_country", "")
+            }
+            
+            linkedin_url = await self.query_openai(member_info, linkedin_results)
+            
+            if linkedin_url:
+                return linkedin_url, domain
+        
+        # PHASE 2: If no results from full email, try with extracted name
+        logger.info(f"PHASE 1 FAILED: No LinkedIn profiles found with email-only query, moving to PHASE 2")
+        
+        # Generate query variations using all available parameters
+        query_variations = QueryBuilder.build_query_variations(search_params)
+        
+        linkedin_url = None
+        domain_used = None
+        
+        # Try each query variation
+        for query in query_variations:
+            # Skip the email-only query since we already tried it
+            if query == email_query:
+                continue
+                
+            logger.info(f"Trying query variation: {query}")
+            
+            # Search across multiple domains
+            results, domain = await self.multi_domain_search(query)
+            
+            # Filter for LinkedIn profiles
+            linkedin_results = [r for r in results if self.is_linkedin_url(r["url"])]
+            
+            if linkedin_results:
+                # Query OpenAI to pick the best match
+                member_info = {
+                    "email": search_params.get("email", ""),
+                    "first_name": search_params.get("first_name", ""),
+                    "last_name": search_params.get("last_name", ""),
+                    "state": search_params.get("location_state", ""),
+                    "country": search_params.get("location_country", "")
+                }
+                
+                linkedin_url = await self.query_openai(member_info, linkedin_results)
+                
+                if linkedin_url:
+                    domain_used = domain
+                    logger.info(f"PHASE 2 SUCCESS: Found LinkedIn profile: {linkedin_url} on {domain} with query: {query}")
+                    break
+        
+        if not linkedin_url:
+            logger.info("Both search phases failed. No LinkedIn profile found.")
+        
+        return linkedin_url, domain_used
     
     async def query_openai(self, member_info: Dict[str, str], search_results: List[Dict[str, str]]) -> Optional[str]:
         """

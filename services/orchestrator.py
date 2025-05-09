@@ -1,11 +1,12 @@
 import logging
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import traceback
 
 from services.email_classification.classifier import EmailClassifier
 from services.lookup_processor import LinkedInLookupProcessor
 from services.personal_lookup import LinkedInProfileLookup
+from utils.param_validator import ParamValidator
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class LinkedInOrchestrator:
     async def orchestrate_lookup(
         self,
         email: str,
-        full_name: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
         location_city: Optional[str] = None,
         location_state: Optional[str] = None,
         location_country: Optional[str] = None
@@ -36,7 +38,8 @@ class LinkedInOrchestrator:
         
         Args:
             email: Email address to look up
-            full_name: Optional full name of the person
+            first_name: Optional first name of the person
+            last_name: Optional last name of the person
             location_city: Optional city location
             location_state: Optional state/province location
             location_country: Optional country location
@@ -47,37 +50,50 @@ class LinkedInOrchestrator:
         start_time = time.time()
         
         try:
-            logger.info(f"DEBUG: Orchestrator - Starting lookup for email={email}, full_name={full_name}")
+            # Validate email
+            if not ParamValidator.validate_email(email):
+                logger.error(f"DEBUG: Invalid email format: {email}")
+                return {
+                    "email": email,
+                    "linkedin_url": None,
+                    "success": False,
+                    "method_used": "none",
+                    "domain_type": "unknown",
+                    "google_domain_used": None,
+                    "processing_time_ms": int((time.time() - start_time) * 1000),
+                    "error_message": f"Invalid email format: {email}"
+                }
+            
+            # Sanitize parameters
+            sanitized_email = email.strip().lower()
+            
+            logger.info(f"DEBUG: Orchestrator - Starting lookup for email={sanitized_email}, first_name={first_name}, last_name={last_name}")
+            
             # Classify the email
-            domain_type, domain = self.email_classifier.classify_email(email)
-            logger.info(f"DEBUG: Orchestrator - Email {email} classified as {domain_type}")
+            domain_type, domain = self.email_classifier.classify_email(sanitized_email)
+            logger.info(f"DEBUG: Orchestrator - Email {sanitized_email} classified as {domain_type}")
             
             linkedin_url = None
             method_used = None
             error_message = None
-            
-            # Extract first name from full_name if provided
-            first_name = None
-            if full_name:
-                name_parts = full_name.split()
-                first_name = name_parts[0] if name_parts else None
-                logger.info(f"DEBUG: Extracted first name: {first_name}")
+            google_domain_used = None
             
             if domain_type == "work":
                 # For work emails, try Google search first
-                logger.info(f"DEBUG: Domain type is work, attempting Google search for: {email}")
+                logger.info(f"DEBUG: Domain type is work, attempting Google search for: {sanitized_email}")
                 
                 try:
                     logger.info("DEBUG: Starting lookup_processor.find_linkedin_profile")
-                    linkedin_url = await self.lookup_processor.find_linkedin_profile(
-                        subscriber_id=email,  # Using email as subscriber_id
-                        email=email,
+                    linkedin_url, google_domain_used = await self.lookup_processor.find_linkedin_profile(
+                        subscriber_id=sanitized_email,  # Using email as subscriber_id
+                        email=sanitized_email,
                         first_name=first_name,
+                        last_name=last_name,
                         location_city=location_city,
                         location_state=location_state,
                         location_country=location_country
                     )
-                    logger.info(f"DEBUG: find_linkedin_profile returned: {linkedin_url}")
+                    logger.info(f"DEBUG: find_linkedin_profile returned: {linkedin_url} (domain: {google_domain_used})")
                     
                     if linkedin_url:
                         logger.info("DEBUG: Google search succeeded")
@@ -86,7 +102,7 @@ class LinkedInOrchestrator:
                         # If Google search fails, try RocketReach as fallback
                         logger.info(f"DEBUG: Google search returned no results, trying RocketReach fallback")
                         try:
-                            linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
+                            linkedin_url = self.rocketreach_lookup.lookup_by_email(sanitized_email)
                             logger.info(f"DEBUG: RocketReach fallback returned: {linkedin_url}")
                             method_used = "rocketreach_fallback" if linkedin_url else None
                         except Exception as rr_e:
@@ -101,7 +117,7 @@ class LinkedInOrchestrator:
                     # Try RocketReach as fallback on error
                     try:
                         logger.info("DEBUG: Attempting RocketReach as fallback after Google search error")
-                        linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
+                        linkedin_url = self.rocketreach_lookup.lookup_by_email(sanitized_email)
                         logger.info(f"DEBUG: RocketReach fallback returned: {linkedin_url}")
                         method_used = "rocketreach_fallback"
                     except Exception as re:
@@ -110,9 +126,9 @@ class LinkedInOrchestrator:
             
             else:  # personal email
                 # For personal emails, go directly to RocketReach
-                logger.info(f"DEBUG: Domain type is personal, attempting RocketReach for: {email}")
+                logger.info(f"DEBUG: Domain type is personal, attempting RocketReach for: {sanitized_email}")
                 try:
-                    linkedin_url = self.rocketreach_lookup.lookup_by_email(email)
+                    linkedin_url = self.rocketreach_lookup.lookup_by_email(sanitized_email)
                     logger.info(f"DEBUG: RocketReach lookup returned: {linkedin_url}")
                     method_used = "rocketreach_primary"
                 except Exception as e:
@@ -124,16 +140,17 @@ class LinkedInOrchestrator:
             
             # Prepare response
             result = {
-                "email": email,
+                "email": sanitized_email,
                 "linkedin_url": linkedin_url,
                 "success": linkedin_url is not None,
                 "method_used": method_used or "none",
                 "domain_type": domain_type,
+                "google_domain_used": google_domain_used,
                 "processing_time_ms": processing_time_ms,
                 "error_message": error_message
             }
             
-            logger.info(f"DEBUG: Lookup completed for {email}: success={result['success']}, method={method_used}, time={processing_time_ms}ms, error={error_message}")
+            logger.info(f"DEBUG: Lookup completed for {sanitized_email}: success={result['success']}, method={method_used}, domain={google_domain_used}, time={processing_time_ms}ms, error={error_message}")
             
             return result
             
@@ -149,6 +166,7 @@ class LinkedInOrchestrator:
                 "success": False,
                 "method_used": "none",
                 "domain_type": "unknown",
+                "google_domain_used": None,
                 "processing_time_ms": processing_time_ms,
                 "error_message": f"Orchestration error: {str(e)}"
             }
