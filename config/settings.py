@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
     # Email Classification Settings 
-    PERSONAL_DOMAINS_FILE: str = os.path.join(BASE_DIR, "data", "personal_domains.txt")
+    PERSONAL_DOMAINS_FILE: str = os.path.join(BASE_DIR, "data", "personal_domains_providers.txt")
     PERSONAL_PROVIDERS_FILE: str = os.path.join(BASE_DIR, "data", "personal_providers.txt")
     
     # Google Search Settings
