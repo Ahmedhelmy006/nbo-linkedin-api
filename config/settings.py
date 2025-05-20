@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     # API Settings
     API_KEY: str
     DEBUG: bool = False
+    APIFY_API_KEY: str
+    LINKEDIN_SCRAPER_ACTOR_ID: str
+    LINKEDIN_SCRAPER_DAILY_LIMIT: int = 70
     
     # Database Settings
     DB_HOST: str
