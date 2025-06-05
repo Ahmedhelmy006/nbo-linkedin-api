@@ -14,6 +14,9 @@ import urllib.parse
 from typing import List, Dict, Any, Optional, Tuple
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import os
+from datetime import datetime
+from pathlib import Path
 
 # Import settings with fallback values
 from config import settings
@@ -295,6 +298,7 @@ class GoogleSearch:
         encoded_query = urllib.parse.quote(query)
         search_url = f'https://www.{domain}/search?q={encoded_query}'
         
+        
         logger.info(f"Searching on {domain}: {search_url}")
         
         async with async_playwright() as p:
@@ -326,6 +330,8 @@ class GoogleSearch:
                 
                 # Navigate to the search URL
                 await page.goto(search_url, wait_until='networkidle')
+                # ADD THIS LINE: Save the search results page HTML
+                await self._save_page_html(page, search_url, "google_search")
                 
                 # Let the page settle
                 await asyncio.sleep(3)
@@ -394,6 +400,43 @@ class GoogleSearch:
                     continue
         
         return results, domain_used
+    
+    async def _save_page_html(self, page, url: str, page_type: str = "page") -> str:
+        """
+        Save the HTML content of a page to logs/pages directory.
+        
+        Args:
+            page: Playwright page object
+            url: URL of the page
+            page_type: Type of page (e.g., 'search', 'linkedin')
+            
+        Returns:
+            Path to the saved HTML file
+        """
+        try:
+            # Create logs/pages directory if it doesn't exist
+            logs_dir = Path("logs/pages")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get page content
+            html_content = await page.content()
+            
+            # Create safe filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
+            safe_url = re.sub(r'[^\w\-_.]', '_', url)[:50]  # Limit length
+            filename = f"{page_type}_{timestamp}_{safe_url}.html"
+            filepath = logs_dir / filename
+            
+            # Save HTML content
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            logger.info(f"Saved HTML content to: {filepath}")
+            return str(filepath)
+            
+        except Exception as e:
+            logger.error(f"Error saving HTML content: {e}")
+            return None
     
     async def find_linkedin_profile_multi_domain(self, search_params: Dict[str, Any]) -> Tuple[Optional[str], str]:
         """
