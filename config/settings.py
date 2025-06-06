@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # OpenAI Settings
     OPENAI_MODEL: str = "gpt-4o"
     
+    # Database URL for easy connection string building
+    @property
+    def database_url(self) -> str:
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+    
     class Config:
         env_file = ".env"
 

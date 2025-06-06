@@ -8,12 +8,15 @@ from services.lookup_processor import LinkedInLookupProcessor
 from services.personal_lookup import LinkedInProfileLookup
 from utils.param_validator import ParamValidator
 
+# NEW: Import database repository
+from database.repositories.subscriber_repository import subscriber_repo
+
 logger = logging.getLogger(__name__)
 
 class LinkedInOrchestrator:
     """
     Orchestrates the LinkedIn profile lookup process by coordinating
-    email classification, Google search, and RocketReach fallback.
+    email classification, database caching, Google search, and RocketReach fallback.
     """
     
     def __init__(self):
@@ -34,7 +37,7 @@ class LinkedInOrchestrator:
         location_country: Optional[str] = None
     ) -> Dict[str, any]:
         """
-        Orchestrate the LinkedIn lookup process based on email type.
+        Orchestrate the LinkedIn lookup process with database caching.
         
         Args:
             email: Email address to look up
@@ -60,6 +63,8 @@ class LinkedInOrchestrator:
                     "method_used": "none",
                     "domain_type": "unknown",
                     "google_domain_used": None,
+                    "database_found": False,
+                    "database_updated": False,
                     "processing_time_ms": int((time.time() - start_time) * 1000),
                     "error_message": f"Invalid email format: {email}"
                 }
@@ -69,7 +74,50 @@ class LinkedInOrchestrator:
             
             logger.info(f"DEBUG: Orchestrator - Starting lookup for email={sanitized_email}, first_name={first_name}, last_name={last_name}")
             
-            # Classify the email
+            # NEW: Check database first
+            database_found = False
+            database_updated = False
+            cached_linkedin_url = None
+            
+            try:
+                logger.info(f"DEBUG: Checking database for email: {sanitized_email}")
+                
+                # Check if subscriber exists
+                subscriber_exists = await subscriber_repo.subscriber_exists(sanitized_email)
+                
+                if subscriber_exists:
+                    logger.info(f"DEBUG: Email {sanitized_email} found in subscribers database")
+                    database_found = True
+                    
+                    # Check if LinkedIn URL already exists
+                    cached_linkedin_url = await subscriber_repo.get_linkedin_url(sanitized_email)
+                    
+                    if cached_linkedin_url:
+                        logger.info(f"DEBUG: Found cached LinkedIn URL in database: {cached_linkedin_url}")
+                        return {
+                            "email": sanitized_email,
+                            "linkedin_url": cached_linkedin_url,
+                            "success": True,
+                            "method_used": "database_cache",
+                            "domain_type": "unknown",  # We don't need to classify for cached results
+                            "google_domain_used": None,
+                            "database_found": True,
+                            "database_updated": False,
+                            "processing_time_ms": int((time.time() - start_time) * 1000),
+                            "error_message": None
+                        }
+                    else:
+                        logger.info(f"DEBUG: Email found in database but no LinkedIn URL cached, proceeding with lookup")
+                else:
+                    logger.info(f"DEBUG: Email {sanitized_email} not found in subscribers database, proceeding with normal lookup")
+                    database_found = False
+                
+            except Exception as db_e:
+                logger.error(f"DEBUG: Database check failed: {db_e}")
+                # Continue with normal lookup if database fails
+                database_found = False
+            
+            # Classify the email (only if we need to do a lookup)
             domain_type, domain = self.email_classifier.classify_email(sanitized_email)
             logger.info(f"DEBUG: Orchestrator - Email {sanitized_email} classified as {domain_type}")
             
@@ -135,6 +183,19 @@ class LinkedInOrchestrator:
                     logger.error(f"DEBUG: RocketReach lookup failed: {e}")
                     error_message = f"RocketReach lookup failed: {str(e)}"
             
+            # NEW: Update database if we found a LinkedIn URL
+            if linkedin_url and database_found:
+                try:
+                    logger.info(f"DEBUG: Updating database with found LinkedIn URL: {linkedin_url}")
+                    database_updated = await subscriber_repo.update_linkedin_url(sanitized_email, linkedin_url)
+                    if database_updated:
+                        logger.info(f"DEBUG: Successfully updated database with LinkedIn URL")
+                    else:
+                        logger.warning(f"DEBUG: Failed to update database with LinkedIn URL")
+                except Exception as db_update_e:
+                    logger.error(f"DEBUG: Error updating database: {db_update_e}")
+                    database_updated = False
+            
             # Calculate processing time
             processing_time_ms = int((time.time() - start_time) * 1000)
             
@@ -146,11 +207,13 @@ class LinkedInOrchestrator:
                 "method_used": method_used or "none",
                 "domain_type": domain_type,
                 "google_domain_used": google_domain_used,
+                "database_found": database_found,
+                "database_updated": database_updated,
                 "processing_time_ms": processing_time_ms,
                 "error_message": error_message
             }
             
-            logger.info(f"DEBUG: Lookup completed for {sanitized_email}: success={result['success']}, method={method_used}, domain={google_domain_used}, time={processing_time_ms}ms, error={error_message}")
+            logger.info(f"DEBUG: Lookup completed for {sanitized_email}: success={result['success']}, method={method_used}, domain={google_domain_used}, db_found={database_found}, db_updated={database_updated}, time={processing_time_ms}ms, error={error_message}")
             
             return result
             
@@ -167,6 +230,8 @@ class LinkedInOrchestrator:
                 "method_used": "none",
                 "domain_type": "unknown",
                 "google_domain_used": None,
+                "database_found": False,
+                "database_updated": False,
                 "processing_time_ms": processing_time_ms,
                 "error_message": f"Orchestration error: {str(e)}"
             }
