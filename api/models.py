@@ -1,6 +1,13 @@
 # api/models.py
 from pydantic import BaseModel, EmailStr, Field, HttpUrl
 from typing import Optional, List, Dict, Any, Union
+from enum import Enum
+
+class CookieChoice(str, Enum):
+    """Enum for cookie file choices."""
+    main = "main"
+    backup = "backup"
+    personal = "personal"
 
 class LinkedInLookupRequest(BaseModel):
     """Request model for LinkedIn profile lookup."""
@@ -29,20 +36,23 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="API status: ok or error")
     version: str = Field(..., description="API version")
 
-# New models for LinkedIn scraping
+# Updated models for LinkedIn scraping with cookie support
 
 class LinkedInScraperRateLimit(BaseModel):
     """Model for LinkedIn scraper rate limit information."""
     is_allowed: bool = Field(..., description="Whether the request is allowed under rate limits")
     remaining: int = Field(..., description="Remaining requests for the day")
+    cookie_used: str = Field(..., description="Cookie file that was used")
 
 class LinkedInScraperRequest(BaseModel):
     """Request model for LinkedIn profile scraping."""
     linkedin_url: str = Field(..., description="LinkedIn profile URL to scrape")
+    cookies: CookieChoice = Field(..., description="Cookie file to use: main, backup, or personal")
 
 class LinkedInBulkScraperRequest(BaseModel):
     """Request model for bulk LinkedIn profile scraping."""
     linkedin_urls: List[str] = Field(..., description="List of LinkedIn profile URLs to scrape")
+    cookies: CookieChoice = Field(..., description="Cookie file to use: main, backup, or personal")
     
 class LinkedInScraperResponse(BaseModel):
     """Response model for LinkedIn profile scraping."""
@@ -79,3 +89,9 @@ class RateLimitStatsResponse(BaseModel):
     remaining: int = Field(..., description="Remaining requests for today")
     used_percent: float = Field(..., description="Percentage of limit used")
     last_updated: str = Field(..., description="Timestamp of last update")
+
+class CookieUsageStatsResponse(BaseModel):
+    """Response model for cookie usage statistics."""
+    date: str = Field(..., description="Current date")
+    last_updated: str = Field(..., description="Timestamp of last update")
+    cookies: Dict[str, Dict[str, Any]] = Field(..., description="Usage stats for each cookie file")
