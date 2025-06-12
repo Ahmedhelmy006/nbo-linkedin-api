@@ -3,7 +3,7 @@
 LinkedIn profile scraper for the NBO Pipeline.
 
 This module provides functionality for scraping LinkedIn profile data
-using the Apify platform with cookie-based rate limiting and database storage.
+using the Apify platform with cookie-based rate limiting, JSON caching, and database storage.
 """
 import os
 import json
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class LinkedInScraper:
     """
-    Service for scraping LinkedIn profiles using Apify with cookie management.
+    Service for scraping LinkedIn profiles using Apify with cookie management and JSON caching.
     """
     
     def __init__(self):
@@ -87,6 +87,7 @@ class LinkedInScraper:
     async def scrape_profile(self, linkedin_url: str, cookie_name: str = "main") -> Dict:
         """
         Scrape a single LinkedIn profile using specified cookies and store it in database.
+        First checks JSON cache to avoid unnecessary scraping.
         
         Args:
             linkedin_url: LinkedIn profile URL to scrape
@@ -110,16 +111,40 @@ class LinkedInScraper:
                     "is_allowed": False,
                     "remaining": 0,
                     "cookie_used": cookie_name
-                }
+                },
+                "data_source": "validation_error"
             }
         
-        # Check cookie-specific rate limit (if cookie tracker is available)
+        # Check JSON cache first
+        try:
+            cached_data = await linkedin_profile_repo.check_json_cache(linkedin_url)
+            if cached_data:
+                logger.info(f"Returning cached data for URL: {linkedin_url}")
+                return {
+                    "success": True,
+                    "linkedin_url": linkedin_url,
+                    "error": None,
+                    "profile_data": cached_data,
+                    "processing_time_ms": int((time.time() - start_time) * 1000),
+                    "rate_limit": {
+                        "is_allowed": True,
+                        "remaining": 999,  # Don't count against rate limit for cached data
+                        "cookie_used": cookie_name
+                    },
+                    "data_source": "cached"
+                }
+        except Exception as e:
+            logger.warning(f"Error checking JSON cache for {linkedin_url}: {e}")
+        
+        # If not cached, proceed with scraping
+        logger.info(f"No cached data found, proceeding with scraping for: {linkedin_url}")
+        
+        # Check cookie-specific rate limit
         try:
             is_allowed, remaining = await cookie_usage_tracker.check_rate_limit(cookie_name, 1)
             if not is_allowed:
                 logger.warning(f"Rate limit exceeded for {cookie_name} cookies: {remaining} remaining")
                 
-                # Get detailed error response
                 other_cookies = cookie_usage_tracker.get_other_cookies_remaining(cookie_name)
                 
                 return {
@@ -136,13 +161,14 @@ class LinkedInScraper:
                     "current_usage": 70,
                     "limit": 70,
                     "other_cookies_remaining": other_cookies,
-                    "reset_time": "00:00:00 UTC"
+                    "reset_time": "00:00:00 UTC",
+                    "data_source": "rate_limited"
                 }
         except Exception as e:
             logger.warning(f"Cookie usage tracker not available: {e}")
-            remaining = 999  # Default high number if tracker unavailable
+            remaining = 999
         
-        # Load the specified cookies
+        # Load cookies
         cookies = self._load_cookies(cookie_name)
         if not cookies:
             logger.error(f"Failed to load {cookie_name} cookies")
@@ -156,44 +182,37 @@ class LinkedInScraper:
                     "is_allowed": True,
                     "remaining": remaining,
                     "cookie_used": cookie_name
-                }
+                },
+                "data_source": "cookie_error"
             }
         
+        # Scrape with Apify
         try:
-            # Prepare input for Apify actor
             run_input = {
                 "urls": [linkedin_url],
                 "cookie": cookies,
-                "proxy": {
-                    "useApifyProxy": True
-                }
+                "proxy": {"useApifyProxy": True}
             }
             
             logger.info(f"Starting actor run for URL: {linkedin_url} using {cookie_name} cookies")
-            
-            # Start the actor and wait for it to finish
             run = self.client.actor(self.actor_id).call(run_input=run_input, wait_secs=300)
-            
             logger.info(f"Actor run completed with status: {run.get('status')}")
             
-            # Process results
             if run and run.get("status") == "SUCCEEDED":
-                # Get dataset items
                 dataset_items = list(self.client.dataset(run["defaultDatasetId"]).iterate_items())
                 
                 if dataset_items:
-                    # Increment usage counter (if tracker available)
+                    # Increment usage counter
                     try:
                         remaining = await cookie_usage_tracker.increment_usage(cookie_name, 1)
                     except Exception as e:
                         logger.warning(f"Could not increment usage counter: {e}")
                         remaining = remaining - 1 if remaining > 0 else 0
                     
-                    # Return the first item (should be only one for a single URL)
                     profile_data = dataset_items[0]
                     
-                    # Store in database
-                    db_success = await self._store_profile_in_database(profile_data, linkedin_url)
+                    # Store in both relational database and JSON cache
+                    db_success = await linkedin_profile_repo.store_profile_with_json_cache(profile_data, linkedin_url)
                     if db_success:
                         logger.info(f"Profile data stored in database for URL: {linkedin_url}")
                     else:
@@ -209,7 +228,8 @@ class LinkedInScraper:
                             "is_allowed": True,
                             "remaining": remaining,
                             "cookie_used": cookie_name
-                        }
+                        },
+                        "data_source": "scraped"
                     }
                 else:
                     return {
@@ -222,12 +242,13 @@ class LinkedInScraper:
                             "is_allowed": True,
                             "remaining": remaining,
                             "cookie_used": cookie_name
-                        }
+                        },
+                        "data_source": "scraped"
                     }
             else:
-                # Get run details for error information
-                run_id = run.get("id") if run else None
+                # Handle failed runs
                 error_msg = f"Actor run failed with status: {run.get('status') if run else 'Unknown'}"
+                run_id = run.get("id") if run else None
                 
                 if run_id:
                     try:
@@ -246,12 +267,12 @@ class LinkedInScraper:
                         "is_allowed": True,
                         "remaining": remaining,
                         "cookie_used": cookie_name
-                    }
+                    },
+                    "data_source": "scraped"
                 }
                 
         except Exception as e:
             logger.error(f"Error scraping LinkedIn profile {linkedin_url}: {e}")
-            
             return {
                 "success": False,
                 "linkedin_url": linkedin_url,
@@ -262,12 +283,14 @@ class LinkedInScraper:
                     "is_allowed": True,
                     "remaining": remaining,
                     "cookie_used": cookie_name
-                }
+                },
+                "data_source": "scraped"
             }
     
     async def scrape_profiles_bulk(self, linkedin_urls: List[str], cookie_name: str = "main") -> Dict:
         """
         Scrape multiple LinkedIn profiles in bulk using specified cookies and store them in database.
+        Checks JSON cache first for each URL to avoid unnecessary scraping.
         
         Args:
             linkedin_urls: List of LinkedIn profile URLs to scrape
@@ -278,7 +301,7 @@ class LinkedInScraper:
         """
         start_time = time.time()
         
-        # Validate URLs and filter out invalid ones
+        # Validate URLs
         valid_urls = []
         invalid_urls = []
         
@@ -302,27 +325,72 @@ class LinkedInScraper:
                     "is_allowed": False,
                     "remaining": 0,
                     "cookie_used": cookie_name
-                }
+                },
+                "data_source": "validation_error"
             }
         
-        # Check cookie-specific rate limit for bulk request (if tracker available)
+        # Check JSON cache for each URL
+        cached_results = []
+        urls_to_scrape = []
+        
+        for url in valid_urls:
+            try:
+                cached_data = await linkedin_profile_repo.check_json_cache(url)
+                if cached_data:
+                    logger.info(f"Found cached data for URL: {url}")
+                    cached_results.append({
+                        "linkedin_url": url,
+                        "success": True,
+                        "error": None,
+                        "profile_data": cached_data,
+                        "data_source": "cached"
+                    })
+                else:
+                    urls_to_scrape.append(url)
+            except Exception as e:
+                logger.warning(f"Error checking cache for {url}: {e}")
+                urls_to_scrape.append(url)  # If cache check fails, scrape it
+        
+        logger.info(f"Found {len(cached_results)} cached profiles, need to scrape {len(urls_to_scrape)} profiles")
+        
+        # If no URLs need scraping, return cached results only
+        if not urls_to_scrape:
+            return {
+                "success": True,
+                "error": None,
+                "valid_count": len(valid_urls),
+                "invalid_count": len(invalid_urls),
+                "invalid_urls": invalid_urls,
+                "results": cached_results,
+                "processing_time_ms": int((time.time() - start_time) * 1000),
+                "rate_limit": {
+                    "is_allowed": True,
+                    "remaining": 999,  # Don't count against rate limit for cached data
+                    "cookie_used": cookie_name
+                },
+                "data_source": "cached",
+                "cached_count": len(cached_results),
+                "scraped_count": 0
+            }
+        
+        # Check rate limit for URLs that need scraping
         try:
-            url_count = len(valid_urls)
+            url_count = len(urls_to_scrape)
             is_allowed, remaining = await cookie_usage_tracker.check_rate_limit(cookie_name, url_count)
             
             if not is_allowed:
                 logger.warning(f"Rate limit would be exceeded for bulk scraping with {cookie_name} cookies: {url_count} URLs requested, {remaining} remaining")
                 
-                # Get detailed error response
                 other_cookies = cookie_usage_tracker.get_other_cookies_remaining(cookie_name)
                 
+                # Return cached results with rate limit error for new URLs
                 return {
-                    "success": False,
-                    "error": f"Daily rate limit would be exceeded for '{cookie_name}' cookies. Requested: {url_count}, Remaining: {remaining}",
+                    "success": len(cached_results) > 0,
+                    "error": f"Daily rate limit would be exceeded for '{cookie_name}' cookies. Requested: {url_count}, Remaining: {remaining}. Returned {len(cached_results)} cached results.",
                     "valid_count": len(valid_urls),
                     "invalid_count": len(invalid_urls),
                     "invalid_urls": invalid_urls,
-                    "results": [],
+                    "results": cached_results,
                     "processing_time_ms": int((time.time() - start_time) * 1000),
                     "rate_limit": {
                         "is_allowed": False,
@@ -332,130 +400,112 @@ class LinkedInScraper:
                     "current_usage": 70 - remaining,
                     "limit": 70,
                     "other_cookies_remaining": other_cookies,
-                    "reset_time": "00:00:00 UTC"
+                    "reset_time": "00:00:00 UTC",
+                    "data_source": "mixed",
+                    "cached_count": len(cached_results),
+                    "scraped_count": 0
                 }
         except Exception as e:
             logger.warning(f"Cookie usage tracker not available: {e}")
-            remaining = 999  # Default high number if tracker unavailable
+            remaining = 999
         
-        # Load the specified cookies
+        # Load cookies
         cookies = self._load_cookies(cookie_name)
         if not cookies:
             logger.error(f"Failed to load {cookie_name} cookies")
             return {
-                "success": False,
-                "error": f"Failed to load {cookie_name} cookies",
+                "success": len(cached_results) > 0,
+                "error": f"Failed to load {cookie_name} cookies. Returned {len(cached_results)} cached results.",
                 "valid_count": len(valid_urls),
                 "invalid_count": len(invalid_urls),
                 "invalid_urls": invalid_urls,
-                "results": [],
+                "results": cached_results,
                 "processing_time_ms": int((time.time() - start_time) * 1000),
                 "rate_limit": {
                     "is_allowed": True,
                     "remaining": remaining,
                     "cookie_used": cookie_name
-                }
+                },
+                "data_source": "mixed",
+                "cached_count": len(cached_results),
+                "scraped_count": 0
             }
         
+        # Scrape remaining URLs
         try:
-            # Prepare input for Apify actor
             run_input = {
-                "urls": valid_urls,
+                "urls": urls_to_scrape,
                 "cookie": cookies,
                 "proxy": {
                     "useApifyProxy": True,
-                    "apifyProxyCountry": "EG"  # Egypt as default
+                    "apifyProxyCountry": "EG"
                 }
             }
             
-            logger.info(f"Starting actor run for {len(valid_urls)} URLs using {cookie_name} cookies")
-            
-            # Start the actor and wait for it to finish
-            run = self.client.actor(self.actor_id).call(run_input=run_input, wait_secs=900)  # Longer timeout for bulk
-            
+            logger.info(f"Starting actor run for {len(urls_to_scrape)} URLs using {cookie_name} cookies")
+            run = self.client.actor(self.actor_id).call(run_input=run_input, wait_secs=900)
             logger.info(f"Actor run completed with status: {run.get('status')}")
             
-            # Process results
+            scraped_results = []
+            
             if run and run.get("status") == "SUCCEEDED":
-                # Get dataset items
                 dataset_items = list(self.client.dataset(run["defaultDatasetId"]).iterate_items())
                 
                 if dataset_items:
-                    # Increment usage counter (if tracker available)
+                    # Increment usage counter
                     try:
-                        remaining = await cookie_usage_tracker.increment_usage(cookie_name, len(valid_urls))
+                        remaining = await cookie_usage_tracker.increment_usage(cookie_name, len(urls_to_scrape))
                     except Exception as e:
                         logger.warning(f"Could not increment usage counter: {e}")
-                        remaining = remaining - len(valid_urls) if remaining > len(valid_urls) else 0
+                        remaining = remaining - len(urls_to_scrape) if remaining > len(urls_to_scrape) else 0
                     
-                    # Map results to their URLs and store in database
-                    results = []
-                    
-                    # Create a map of profile URLs to their data
+                    # Map results to URLs
                     url_to_data = {}
                     for item in dataset_items:
                         if "url" in item:
                             url_to_data[item["url"]] = item
                     
-                    # Create result entries for each valid URL
-                    for url in valid_urls:
+                    # Process each URL
+                    for url in urls_to_scrape:
                         if url in url_to_data:
                             profile_data = url_to_data[url]
                             
-                            # Store in database
-                            db_success = await self._store_profile_in_database(profile_data, url)
+                            # Store in both relational database and JSON cache
+                            db_success = await linkedin_profile_repo.store_profile_with_json_cache(profile_data, url)
                             if db_success:
                                 logger.info(f"Profile data stored in database for URL: {url}")
                             else:
                                 logger.warning(f"Failed to store profile data in database for URL: {url}")
                             
-                            results.append({
+                            scraped_results.append({
                                 "linkedin_url": url,
                                 "success": True,
                                 "error": None,
-                                "profile_data": profile_data
+                                "profile_data": profile_data,
+                                "data_source": "scraped"
                             })
                         else:
-                            results.append({
+                            scraped_results.append({
                                 "linkedin_url": url,
                                 "success": False,
                                 "error": "Profile not found in results",
-                                "profile_data": None
+                                "profile_data": None,
+                                "data_source": "scraped"
                             })
-                    
-                    return {
-                        "success": True,
-                        "error": None,
-                        "valid_count": len(valid_urls),
-                        "invalid_count": len(invalid_urls),
-                        "invalid_urls": invalid_urls,
-                        "results": results,
-                        "processing_time_ms": int((time.time() - start_time) * 1000),
-                        "rate_limit": {
-                            "is_allowed": True,
-                            "remaining": remaining,
-                            "cookie_used": cookie_name
-                        }
-                    }
                 else:
-                    return {
-                        "success": False,
-                        "error": "No profile data found",
-                        "valid_count": len(valid_urls),
-                        "invalid_count": len(invalid_urls),
-                        "invalid_urls": invalid_urls,
-                        "results": [],
-                        "processing_time_ms": int((time.time() - start_time) * 1000),
-                        "rate_limit": {
-                            "is_allowed": True,
-                            "remaining": remaining,
-                            "cookie_used": cookie_name
-                        }
-                    }
+                    # No scraped data found
+                    for url in urls_to_scrape:
+                        scraped_results.append({
+                            "linkedin_url": url,
+                            "success": False,
+                            "error": "No profile data found",
+                            "profile_data": None,
+                            "data_source": "scraped"
+                        })
             else:
-                # Get run details for error information
-                run_id = run.get("id") if run else None
+                # Handle failed runs
                 error_msg = f"Actor run failed with status: {run.get('status') if run else 'Unknown'}"
+                run_id = run.get("id") if run else None
                 
                 if run_id:
                     try:
@@ -464,60 +514,58 @@ class LinkedInScraper:
                     except Exception as e:
                         logger.error(f"Error getting run details: {e}")
                 
-                return {
-                    "success": False,
-                    "error": error_msg,
-                    "valid_count": len(valid_urls),
-                    "invalid_count": len(invalid_urls),
-                    "invalid_urls": invalid_urls,
-                    "results": [],
-                    "processing_time_ms": int((time.time() - start_time) * 1000),
-                    "rate_limit": {
-                        "is_allowed": True,
-                        "remaining": remaining,
-                        "cookie_used": cookie_name
-                    }
-                }
-                
-        except Exception as e:
-            logger.error(f"Error during bulk scraping: {e}")
+                for url in urls_to_scrape:
+                    scraped_results.append({
+                        "linkedin_url": url,
+                        "success": False,
+                        "error": error_msg,
+                        "profile_data": None,
+                        "data_source": "scraped"
+                    })
+            
+            # Combine results
+            all_results = cached_results + scraped_results
+            successful_results = [r for r in all_results if r["success"]]
+            overall_success = len(successful_results) > 0
             
             return {
-                "success": False,
-                "error": f"Bulk scraping error: {str(e)}",
+                "success": overall_success,
+                "error": None if overall_success else "All scraping attempts failed",
                 "valid_count": len(valid_urls),
                 "invalid_count": len(invalid_urls),
                 "invalid_urls": invalid_urls,
-                "results": [],
+                "results": all_results,
                 "processing_time_ms": int((time.time() - start_time) * 1000),
                 "rate_limit": {
                     "is_allowed": True,
                     "remaining": remaining,
                     "cookie_used": cookie_name
-                }
+                },
+                "data_source": "mixed" if cached_results and scraped_results else ("cached" if cached_results else "scraped"),
+                "cached_count": len(cached_results),
+                "scraped_count": len([r for r in scraped_results if r["success"]])
             }
-    
-    async def _store_profile_in_database(self, profile_data: Dict[str, Any], linkedin_url: str) -> bool:
-        """
-        Store scraped profile data in the database.
-        
-        Args:
-            profile_data: Scraped LinkedIn profile data
-            linkedin_url: LinkedIn URL from the request
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            success = await linkedin_profile_repo.store_profile(profile_data, linkedin_url)
-            if success:
-                logger.info(f"Profile stored in database successfully for {linkedin_url}")
-            else:
-                logger.warning(f"Failed to store profile in database for {linkedin_url} (may be due to invalid URL format)")
-            return success
+                
         except Exception as e:
-            logger.warning(f"Database storage failed for {linkedin_url}: {e}")
-            return False
+            logger.error(f"Error during bulk scraping: {e}")
+            
+            return {
+                "success": len(cached_results) > 0,
+                "error": f"Bulk scraping error: {str(e)}. Returned {len(cached_results)} cached results.",
+                "valid_count": len(valid_urls),
+                "invalid_count": len(invalid_urls),
+                "invalid_urls": invalid_urls,
+                "results": cached_results,
+                "processing_time_ms": int((time.time() - start_time) * 1000),
+                "rate_limit": {
+                    "is_allowed": True,
+                    "remaining": remaining,
+                    "cookie_used": cookie_name
+                },
+                "data_source": "cached" if cached_results else "error",
+                "cached_count": len(cached_results),
+                "scraped_count": 0
+            }
     
     def get_cookie_usage_stats(self, cookie_name: str = None) -> Dict:
         """
@@ -548,7 +596,6 @@ class LinkedInScraper:
         if not url or not isinstance(url, str):
             return False
         
-        # Basic validation for LinkedIn profile URL
         valid_patterns = [
             "linkedin.com/in/",
             "www.linkedin.com/in/"

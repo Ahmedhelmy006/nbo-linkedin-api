@@ -1,8 +1,9 @@
 # database/repositories/linkedin_profile_repository.py
 """
 LinkedIn Profile repository for database operations.
-Handles storing scraped LinkedIn profile data into the database.
+Handles storing scraped LinkedIn profile data into the database with JSON caching.
 """
+import json
 import logging
 import re
 from typing import Dict, Any, Optional, List
@@ -13,8 +14,101 @@ logger = logging.getLogger(__name__)
 
 class LinkedInProfileRepository:
     """
-    Repository for LinkedIn profile database operations.
+    Repository for LinkedIn profile database operations with JSON caching.
     """
+    
+    async def check_json_cache(self, linkedin_url: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if LinkedIn profile JSON data is already cached.
+        
+        Args:
+            linkedin_url: LinkedIn URL to check
+            
+        Returns:
+            Cached profile data if found, None otherwise
+        """
+        connection = None
+        try:
+            connection = await db_manager.get_connection()
+            
+            query = "SELECT json_profile FROM linkedin_json_profiles WHERE linkedin_url = $1"
+            result = await connection.fetchrow(query, linkedin_url)
+            
+            if result:
+                logger.info(f"Found cached JSON data for URL: {linkedin_url}")
+                return result['json_profile']
+            else:
+                logger.info(f"No cached JSON data found for URL: {linkedin_url}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Error checking JSON cache for {linkedin_url}: {e}")
+            return None
+        finally:
+            if connection:
+                await connection.close()
+    
+    async def store_json_profile(self, linkedin_url: str, profile_data: Dict[str, Any]) -> bool:
+        """
+        Store raw LinkedIn profile JSON data in cache.
+        
+        Args:
+            linkedin_url: LinkedIn URL
+            profile_data: Raw profile data from Apify
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = None
+        try:
+            connection = await db_manager.get_connection()
+            
+            query = """
+            INSERT INTO linkedin_json_profiles (linkedin_url, json_profile, created_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (linkedin_url) DO UPDATE SET
+                json_profile = EXCLUDED.json_profile,
+                created_at = EXCLUDED.created_at
+            """
+            
+            await connection.execute(
+                query,
+                linkedin_url,
+                json.dumps(profile_data),  # Convert dict to JSON string
+                datetime.now()
+            )
+            
+            logger.info(f"Successfully stored JSON profile data for URL: {linkedin_url}")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to store JSON profile data for {linkedin_url}: {e}")
+            return False
+        finally:
+            if connection:
+                await connection.close()
+    
+    async def store_profile_with_json_cache(self, profile_data: Dict[str, Any], linkedin_url: str) -> bool:
+        """
+        Store LinkedIn profile data in both relational tables and JSON cache.
+        
+        Args:
+            profile_data: Scraped LinkedIn profile data
+            linkedin_url: LinkedIn URL from the request
+            
+        Returns:
+            True if relational storage successful (JSON cache failure doesn't affect this)
+        """
+        # Store in relational tables (existing functionality)
+        relational_success = await self.store_profile(profile_data, linkedin_url)
+        
+        # Store in JSON cache (separate from relational storage)
+        try:
+            await self.store_json_profile(linkedin_url, profile_data)
+        except Exception as e:
+            logger.warning(f"JSON cache storage failed for {linkedin_url}, but relational storage succeeded: {e}")
+        
+        return relational_success
     
     async def store_profile(self, profile_data: Dict[str, Any], linkedin_url: str) -> bool:
         """
