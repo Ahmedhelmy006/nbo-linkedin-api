@@ -1,16 +1,9 @@
 # api/v1/endpoints/scraper.py
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
+from fastapi import APIRouter, HTTPException, Depends, Query
 import logging
 from typing import Optional, List
-from api.models import (
-    LinkedInScraperRequest,
-    LinkedInScraperResponse,
-    LinkedInBulkScraperRequest,
-    LinkedInBulkScraperResponse,
-    CookieUsageStatsResponse,
-    CookieChoice
-)
 from services.linkedin_scraper import LinkedInScraper
+from services.scraper_rate_limiter import ScraperRateLimiter
 from api.auth import api_key_auth
 
 # Initialize logger
@@ -22,9 +15,31 @@ router = APIRouter(
     tags=["scraper"]
 )
 
-@router.get("/cookie_usage", response_model=CookieUsageStatsResponse)
+@router.get("/rate_limit")
+async def get_rate_limit_stats(api_key: str = Depends(api_key_auth)):
+    """
+    Get current rate limit statistics for LinkedIn scraping.
+    
+    Args:
+        api_key: API key for authentication (from dependency)
+    """
+    try:
+        logger.info("Received request for rate limit statistics")
+        
+        # Initialize rate limiter
+        rate_limiter = ScraperRateLimiter()
+        
+        # Get rate limit stats
+        stats = rate_limiter.get_usage_stats()
+        
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting rate limit stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@router.get("/cookie_usage")
 async def get_cookie_usage_stats(
-    cookie_name: Optional[CookieChoice] = Query(None, description="Specific cookie name or None for all cookies"),
+    cookie_name: Optional[str] = Query(None, description="Specific cookie name or None for all cookies"),
     api_key: str = Depends(api_key_auth)
 ):
     """
@@ -37,18 +52,59 @@ async def get_cookie_usage_stats(
     try:
         logger.info(f"Received request for cookie usage statistics: {cookie_name}")
         
+        # Initialize scraper
+        scraper = LinkedInScraper()
+        
+        # Get cookie usage stats
+        stats = scraper.get_cookie_usage_stats(cookie_name)
+        
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting cookie usage stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@router.post("/lkd_scraper")
+async def scrape_linkedin_profile(
+    request: dict,
+    api_key: str = Depends(api_key_auth)
+):
+    """
+    Scrape a single LinkedIn profile using specified cookies.
+    
+    Args:
+        request: Request body containing linkedin_url and cookies
+        api_key: API key for authentication (from dependency)
+    """
+    try:
+        linkedin_url = request.get("linkedin_url")
+        cookies = request.get("cookies")
+        
+        if not linkedin_url:
+            raise HTTPException(status_code=400, detail="linkedin_url is required")
+        
+        if not cookies:
+            raise HTTPException(status_code=400, detail="cookies parameter is required (main, backup, or personal)")
+        
+        if cookies not in ["main", "backup", "personal"]:
+            raise HTTPException(status_code=400, detail="cookies must be one of: main, backup, personal")
+        
+        logger.info(f"Received request to scrape LinkedIn profile: {linkedin_url} using {cookies} cookies")
+        
+        # Initialize scraper
+        scraper = LinkedInScraper()
+        
         # Scrape profile with specified cookies
-        result = await scraper.scrape_profile(linkedin_url, cookie_name)
+        result = await scraper.scrape_profile(linkedin_url, cookies)
         
         # Check if rate limit exceeded
         if not result["success"] and result.get("rate_limit", {}).get("is_allowed") is False:
-            logger.warning(f"Rate limit exceeded for {cookie_name} cookies: {result.get('error')}")
+            logger.warning(f"Rate limit exceeded for {cookies} cookies: {result.get('error')}")
             
             # Build detailed 429 response
             response_detail = {
                 "success": False,
                 "error": result.get("error"),
-                "cookie_used": cookie_name,
+                "cookie_used": cookies,
                 "current_usage": result.get("current_usage", 70),
                 "limit": result.get("limit", 70),
                 "remaining": result.get("rate_limit", {}).get("remaining", 0),
@@ -70,22 +126,32 @@ async def get_cookie_usage_stats(
         logger.error(f"Error scraping LinkedIn profile: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.post("/lkd_bulk_scraper", response_model=LinkedInBulkScraperResponse)
+@router.post("/lkd_bulk_scraper")
 async def scrape_linkedin_profiles_bulk(
-    request: LinkedInBulkScraperRequest,
+    request: dict,
     api_key: str = Depends(api_key_auth)
 ):
     """
     Scrape multiple LinkedIn profiles in bulk using specified cookies.
     
     Args:
-        request: LinkedIn bulk scraper request with list of profile URLs and cookie choice
+        request: Request body containing linkedin_urls list and cookies
         api_key: API key for authentication (from dependency)
     """
     try:
-        linkedin_urls = request.linkedin_urls
-        cookie_name = request.cookies.value
-        logger.info(f"Received request to scrape {len(linkedin_urls)} LinkedIn profiles using {cookie_name} cookies")
+        linkedin_urls = request.get("linkedin_urls")
+        cookies = request.get("cookies")
+        
+        if not linkedin_urls or not isinstance(linkedin_urls, list):
+            raise HTTPException(status_code=400, detail="linkedin_urls list is required")
+        
+        if not cookies:
+            raise HTTPException(status_code=400, detail="cookies parameter is required (main, backup, or personal)")
+        
+        if cookies not in ["main", "backup", "personal"]:
+            raise HTTPException(status_code=400, detail="cookies must be one of: main, backup, personal")
+        
+        logger.info(f"Received request to scrape {len(linkedin_urls)} LinkedIn profiles using {cookies} cookies")
         
         # Check for empty URL list
         if not linkedin_urls:
@@ -99,17 +165,17 @@ async def scrape_linkedin_profiles_bulk(
         scraper = LinkedInScraper()
         
         # Scrape profiles in bulk with specified cookies
-        result = await scraper.scrape_profiles_bulk(linkedin_urls, cookie_name)
+        result = await scraper.scrape_profiles_bulk(linkedin_urls, cookies)
         
         # Check if rate limit exceeded
         if not result["success"] and result.get("rate_limit", {}).get("is_allowed") is False:
-            logger.warning(f"Rate limit exceeded for bulk {cookie_name} cookies: {result.get('error')}")
+            logger.warning(f"Rate limit exceeded for bulk {cookies} cookies: {result.get('error')}")
             
             # Build detailed 429 response
             response_detail = {
                 "success": False,
                 "error": result.get("error"),
-                "cookie_used": cookie_name,
+                "cookie_used": cookies,
                 "current_usage": result.get("current_usage", 70),
                 "limit": result.get("limit", 70),
                 "remaining": result.get("rate_limit", {}).get("remaining", 0),
@@ -131,10 +197,10 @@ async def scrape_linkedin_profiles_bulk(
         logger.error(f"Error during bulk LinkedIn scraping: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/lkd_scraper", response_model=LinkedInScraperResponse)
+@router.get("/lkd_scraper")
 async def scrape_linkedin_profile_get(
     linkedin_url: str,
-    cookies: CookieChoice,
+    cookies: str,
     api_key: str = Depends(api_key_auth)
 ):
     """
@@ -146,13 +212,16 @@ async def scrape_linkedin_profile_get(
         api_key: API key for authentication (from dependency)
     """
     try:
+        if cookies not in ["main", "backup", "personal"]:
+            raise HTTPException(status_code=400, detail="cookies must be one of: main, backup, personal")
+        
         logger.info(f"Received GET request to scrape LinkedIn profile: {linkedin_url} using {cookies} cookies")
         
         # Initialize scraper
         scraper = LinkedInScraper()
         
         # Scrape profile with specified cookies
-        result = await scraper.scrape_profile(linkedin_url, cookies.value)
+        result = await scraper.scrape_profile(linkedin_url, cookies)
         
         # Check if rate limit exceeded
         if not result["success"] and result.get("rate_limit", {}).get("is_allowed") is False:
@@ -162,7 +231,7 @@ async def scrape_linkedin_profile_get(
             response_detail = {
                 "success": False,
                 "error": result.get("error"),
-                "cookie_used": cookies.value,
+                "cookie_used": cookies,
                 "current_usage": result.get("current_usage", 70),
                 "limit": result.get("limit", 70),
                 "remaining": result.get("rate_limit", {}).get("remaining", 0),
@@ -183,30 +252,3 @@ async def scrape_linkedin_profile_get(
     except Exception as e:
         logger.error(f"Error scraping LinkedIn profile: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-        # Get cookie usage stats
-        stats = scraper.get_cookie_usage_stats(cookie_name)
-        
-        return stats
-    except Exception as e:
-        logger.error(f"Error getting cookie usage stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@router.post("/lkd_scraper", response_model=LinkedInScraperResponse)
-async def scrape_linkedin_profile(
-    request: LinkedInScraperRequest,
-    api_key: str = Depends(api_key_auth)
-):
-    """
-    Scrape a single LinkedIn profile using specified cookies.
-    
-    Args:
-        request: LinkedIn scraper request with profile URL and cookie choice
-        api_key: API key for authentication (from dependency)
-    """
-    try:
-        linkedin_url = request.linkedin_url
-        cookie_name = request.cookies.value
-        logger.info(f"Received request to scrape LinkedIn profile: {linkedin_url} using {cookie_name} cookies")
-        
-        # Initialize scraper
-        scraper = LinkedInScraper()

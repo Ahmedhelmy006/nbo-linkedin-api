@@ -1,9 +1,9 @@
 {
-  "date": "2025-06-11",
+  "date": "2025-06-12",
   "usage": {
-    "main": 10,
-    "backup": 20,
-    "personal": 6
+    "main": 1,
+    "backup": 0,
+    "personal": 0
   },
-  "last_updated": "2025-06-11T15:47:57.813378"
+  "last_updated": "2025-06-12T11:49:59.523450"
 }
