@@ -31,10 +31,10 @@ class ScraperRateLimiter:
         
         # Get daily limit from settings (default: 70)
         try:
-            self.daily_limit = getattr(settings, 'LINKEDIN_SCRAPER_DAILY_LIMIT', 70)
+            self.daily_limit = getattr(settings, 'LINKEDIN_SCRAPER_DAILY_LIMIT', 1000)
         except AttributeError:
             logger.warning("LINKEDIN_SCRAPER_DAILY_LIMIT not found in settings, using default value of 70")
-            self.daily_limit = 70
+            self.daily_limit = 1000
         
         logger.info(f"LinkedIn scraper rate limiter initialized with daily limit of {self.daily_limit}")
     

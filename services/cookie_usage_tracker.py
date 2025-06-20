@@ -24,7 +24,7 @@ class CookieUsageTracker:
             usage_file: Path to the usage tracking JSON file
         """
         self.usage_file = Path(usage_file)
-        self.daily_limit = 70
+        self.daily_limit = 500
         self.cookie_names = ["main", "backup", "personal"]
         
         # Ensure the data directory exists

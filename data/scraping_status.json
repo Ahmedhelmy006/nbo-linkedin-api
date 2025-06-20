@@ -1,0 +1,14 @@
+{
+  "date": "2025-06-20",
+  "usage": {
+    "main": 100,
+    "backup": 0,
+    "personal": 0
+  },
+  "limits": {
+    "main": 100,
+    "backup": 70,
+    "personal": 10
+  },
+  "last_updated": "2025-06-20T11:55:38.030850"
+}
